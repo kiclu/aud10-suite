@@ -10,3 +10,4 @@
 #include "fx/hilo_pass.hpp"
 #include "fx/pitch_correct.hpp"
 #include "fx/saturator.hpp"
+#include "fx/pitch_shift.hpp"

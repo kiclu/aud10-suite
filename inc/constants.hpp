@@ -14,6 +14,7 @@ constexpr int FX_PEQ    = 6;
 constexpr int FX_HILO   = 7;
 constexpr int FX_PCOR   = 8;
 constexpr int FX_SAT    = 9;
+constexpr int FX_PSHIFT = 10;
 
 enum Field : int {
     F_RATE, F_CHAN, F_BUF, F_VOL_IN, F_VOL_OUT,
@@ -45,6 +46,7 @@ enum SlotEditField {
     SE_PC_EXP_YIN, SE_PC_EXP_DET, SE_PC_EXP_WARM, SE_PC_EXP_GATE, SE_PC_EXP_LMIN,
     SE_PC_EXP_LMAX,
     SE_SAT_EN, SE_SAT_DRIVE, SE_SAT_MIX,
+    SE_PS_EN, SE_PS_SEMI, SE_PS_WET,
     SE_BACK,
     SE_COUNT
 };
@@ -105,6 +107,8 @@ inline void se_advance(SlotEditField &c, int fx, bool empty, int dir,
         SE_PC_EXP_LMIN, SE_PC_EXP_LMAX, SE_BACK};
     static const SlotEditField T_SAT[] = {
         SE_TYPE, SE_SAT_EN, SE_SAT_DRIVE, SE_SAT_MIX, SE_BACK};
+    static const SlotEditField T_PS[] = {
+        SE_TYPE, SE_PS_EN, SE_PS_SEMI, SE_PS_WET, SE_BACK};
 
     const SlotEditField *tab = T_EMPTY;
     int n = 2;
@@ -121,6 +125,7 @@ inline void se_advance(SlotEditField &c, int fx, bool empty, int dir,
             n   = pcor_exp_layers ? 15 : 9;
         }
         else if (fx == FX_SAT) { tab = T_SAT; n = 5; }
+        else if (fx == FX_PSHIFT) { tab = T_PS; n = 5; }
     }
     int i = 0;
     for (; i < n; i++)
@@ -137,8 +142,11 @@ extern const float COMP_RATIOS[9];
 extern const float COMP_ATTACKS[9];
 extern const float COMP_RELEASES[9];
 extern const float COMP_KNEES[7];
-constexpr int SLOT_TYPES = 10;
+constexpr int SLOT_TYPES = 11;
 extern const char *const SLOT_TYPE_NAMES[SLOT_TYPES];
+/** Pitch shift: semi_idx maps 0..PS_SEMI_STEPS-1 → (idx - PS_SEMI_CENTER) semitones. */
+constexpr int PS_SEMI_STEPS  = 25;
+constexpr int PS_SEMI_CENTER = 12;
 constexpr int PCOR_SCALES = 3;
 extern const char *const PCOR_SCALE_NAMES[PCOR_SCALES];
 /** Pitch-correct experimental mode: discrete knob values (indices in PitchCorrectSlotParams). */

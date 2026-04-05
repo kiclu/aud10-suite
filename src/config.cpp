@@ -115,6 +115,10 @@ static void fwrite_effect_chain(FILE *f, const Config &c) {
         std::fprintf(f, "slot_%d_sat_enabled=%d\n", i, st.enabled ? 1 : 0);
         std::fprintf(f, "slot_%d_sat_drive=%d\n", i, st.drive);
         std::fprintf(f, "slot_%d_sat_mix=%d\n", i, st.mix);
+        const auto &ps = c.slot_ps[static_cast<std::size_t>(i)];
+        std::fprintf(f, "slot_%d_ps_enabled=%d\n", i, ps.enabled ? 1 : 0);
+        std::fprintf(f, "slot_%d_ps_semi_idx=%d\n", i, ps.semi_idx);
+        std::fprintf(f, "slot_%d_ps_wet=%d\n", i, ps.wet);
     }
 }
 
@@ -182,6 +186,9 @@ static void clamp_effect_chain_config(Config &c) {
         auto &st = c.slot_sat[static_cast<std::size_t>(i)];
         st.drive = std::clamp(st.drive, 0, 100);
         st.mix   = std::clamp(st.mix, 0, 100);
+        auto &ps = c.slot_ps[static_cast<std::size_t>(i)];
+        ps.semi_idx = std::clamp(ps.semi_idx, 0, PS_SEMI_STEPS - 1);
+        ps.wet      = std::clamp(ps.wet, 0, 100);
     }
 }
 
@@ -302,6 +309,14 @@ static void apply_chain_or_slot_key(const char *key, const char *val, Config &c,
             st.drive = std::atoi(val);
         else if (!std::strcmp(sub, "sat_mix"))
             st.mix = std::atoi(val);
+    } else if (!std::strncmp(sub, "ps_", 3)) {
+        auto &ps = c.slot_ps[static_cast<std::size_t>(si)];
+        if (!std::strcmp(sub, "ps_enabled"))
+            ps.enabled = std::atoi(val) != 0;
+        else if (!std::strcmp(sub, "ps_semi_idx"))
+            ps.semi_idx = std::atoi(val);
+        else if (!std::strcmp(sub, "ps_wet"))
+            ps.wet = std::atoi(val);
     } else {
         auto &p = c.slot_comp[static_cast<std::size_t>(si)];
         if (!std::strcmp(sub, "enabled"))
@@ -349,6 +364,7 @@ void copy_effect_chain(const Config &src, Config &dst) {
     dst.slot_hilo  = src.slot_hilo;
     dst.slot_pc    = src.slot_pc;
     dst.slot_sat   = src.slot_sat;
+    dst.slot_ps    = src.slot_ps;
 }
 
 bool save_effect_chain_profile(const std::string &slug, const Config &c) {

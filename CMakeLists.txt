@@ -28,6 +28,7 @@ add_executable(aud10_suite
     src/fx/hilo_pass.cpp
     src/fx/pitch_correct.cpp
     src/fx/saturator.cpp
+    src/fx/pitch_shift.cpp
 )
 set_target_properties(aud10_suite PROPERTIES OUTPUT_NAME "aud10-suite")
 target_include_directories(aud10_suite PRIVATE

@@ -11,7 +11,7 @@ const float COMP_KNEES[]    = {0.0f,1.0f,2.0f,3.0f,6.0f,9.0f,12.0f};
 
 const char *const SLOT_TYPE_NAMES[] = {
     "Empty", "Compressor", "EQ", "Reverb", "Delay",
-    "De-esser", "Param EQ", "Hi/Lo pass", "Pitch correct", "Saturator"};
+    "De-esser", "Param EQ", "Hi/Lo pass", "Pitch correct", "Saturator", "Pitch shift"};
 
 const char *const PCOR_SCALE_NAMES[] = {"Chromatic", "Major", "Minor"};
 

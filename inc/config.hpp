@@ -83,6 +83,13 @@ struct SaturatorSlotParams {
     int  mix     = 100; // 0–100 wet (shaped signal)
 };
 
+struct PitchShiftSlotParams {
+    bool enabled = true;
+    /** 0..PS_SEMI_STEPS-1 → semitones relative to PS_SEMI_CENTER (default = 0 st). */
+    int semi_idx = PS_SEMI_CENTER;
+    int wet      = 100;
+};
+
 struct Config {
     int  channel_idx     = 0;
     int  buffer_idx      = 2;
@@ -107,6 +114,7 @@ struct Config {
     std::array<HiloSlotParams, CHAIN_SLOTS> slot_hilo{};
     std::array<PitchCorrectSlotParams, CHAIN_SLOTS> slot_pc{};
     std::array<SaturatorSlotParams, CHAIN_SLOTS> slot_sat{};
+    std::array<PitchShiftSlotParams, CHAIN_SLOTS> slot_ps{};
 };
 
 std::string config_path();

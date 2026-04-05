@@ -256,13 +256,13 @@ static void connect_ports(unsigned ch,
         jack_connect(g_client, jack_port_name(g_out[1]), play_r.c_str());
 }
 
-// slot_type[i]: FX_NONE..FX_SAT
+// slot_type[i]: FX_NONE..FX_PSHIFT
 static void rebuild_fx_chain(const int slot_type[CHAIN_SLOTS]) {
     g_rt_n = 0;
     g_gr_meter = nullptr;
     for (int i = 0; i < CHAIN_SLOTS; i++) {
         int t = slot_type[i];
-        if (t <= FX_NONE || t > FX_SAT) {
+        if (t <= FX_NONE || t > FX_PSHIFT) {
             g_fx_slots[i].reset();
             continue;
         }
@@ -277,6 +277,7 @@ static void rebuild_fx_chain(const int slot_type[CHAIN_SLOTS]) {
             else if (t == FX_HILO) g_fx_slots[i] = std::make_unique<HiLoPassFX>();
             else if (t == FX_PCOR) g_fx_slots[i] = std::make_unique<PitchCorrectFX>();
             else if (t == FX_SAT)  g_fx_slots[i] = std::make_unique<SaturatorFX>();
+            else if (t == FX_PSHIFT) g_fx_slots[i] = std::make_unique<PitchShiftFX>();
         }
         Effect *e = g_fx_slots[i].get();
         g_rt_fx[g_rt_n++] = e;
@@ -345,6 +346,7 @@ struct SlotClipboard {
     HiloSlotParams hilo{};
     PitchCorrectSlotParams pc{};
     SaturatorSlotParams sat{};
+    PitchShiftSlotParams ps{};
 };
 
 static SlotClipboard g_chain_clip;
@@ -359,7 +361,8 @@ static void slot_clip_copy(SlotClipboard &cb, int si,
                            const std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
                            const std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
                            const std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-                           const std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+                           const std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                           const std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     if (si < 0 || si >= CHAIN_SLOTS) return;
     const std::size_t u = static_cast<std::size_t>(si);
@@ -374,6 +377,7 @@ static void slot_clip_copy(SlotClipboard &cb, int si,
     cb.hilo = slot_hilo[u];
     cb.pc = slot_pc[u];
     cb.sat = slot_sat[u];
+    cb.ps = slot_ps[u];
 }
 
 static void slot_clip_paste(SlotClipboard &cb, int si,
@@ -386,7 +390,8 @@ static void slot_clip_paste(SlotClipboard &cb, int si,
                             std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
                             std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
                             std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-                            std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+                            std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                            std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     if (!cb.valid || si < 0 || si >= CHAIN_SLOTS) return;
     const std::size_t u = static_cast<std::size_t>(si);
@@ -400,6 +405,7 @@ static void slot_clip_paste(SlotClipboard &cb, int si,
     slot_hilo[u] = cb.hilo;
     slot_pc[u] = cb.pc;
     slot_sat[u] = cb.sat;
+    slot_ps[u] = cb.ps;
 }
 
 static void slot_clip_cut(SlotClipboard &cb, int si,
@@ -412,10 +418,11 @@ static void slot_clip_cut(SlotClipboard &cb, int si,
                           std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
                           std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
                           std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-                          std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+                          std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                            std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     slot_clip_copy(cb, si, slot_type, slot_param, slot_eq, slot_rv, slot_dl, slot_dss,
-                   slot_peq, slot_hilo, slot_pc, slot_sat);
+                   slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
     slot_type[static_cast<std::size_t>(si)] = FX_NONE;
 }
 
@@ -429,7 +436,8 @@ static void chain_swap_slots(int a, int b,
                              std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
                              std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
                              std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-                             std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+                             std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                            std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     if (a < 0 || b < 0 || a >= CHAIN_SLOTS || b >= CHAIN_SLOTS) return;
     using std::swap;
@@ -445,6 +453,7 @@ static void chain_swap_slots(int a, int b,
     swap(slot_hilo[ua], slot_hilo[ub]);
     swap(slot_pc[ua], slot_pc[ub]);
     swap(slot_sat[ua], slot_sat[ub]);
+    swap(slot_ps[ua], slot_ps[ub]);
 }
 
 // Per-slot bypass (matches each effect’s “Enabled” / Hi–Lo filters).
@@ -458,7 +467,8 @@ static bool slot_effect_is_on(
     const std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
     const std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
     const std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-    const std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+    const std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                           const std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     st = std::clamp(st, 0, SLOT_TYPES - 1);
     switch (st) {
@@ -472,6 +482,7 @@ static bool slot_effect_is_on(
     case FX_HILO: return slot_hilo[si].hpf_enabled || slot_hilo[si].lpf_enabled;
     case FX_PCOR: return slot_pc[si].enabled;
     case FX_SAT: return slot_sat[si].enabled;
+    case FX_PSHIFT: return slot_ps[si].enabled;
     default: return false;
     }
 }
@@ -486,7 +497,8 @@ static void slot_toggle_effect_enabled(
     std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
     std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
     std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-    std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+    std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                            std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     st = std::clamp(st, 0, SLOT_TYPES - 1);
     switch (st) {
@@ -509,6 +521,7 @@ static void slot_toggle_effect_enabled(
     } break;
     case FX_PCOR: slot_pc[si].enabled = !slot_pc[si].enabled; break;
     case FX_SAT: slot_sat[si].enabled = !slot_sat[si].enabled; break;
+    case FX_PSHIFT: slot_ps[si].enabled = !slot_ps[si].enabled; break;
     default: break;
     }
 }
@@ -523,7 +536,8 @@ static Config config_snapshot_chain(
     const std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
     const std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
     const std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-    const std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+    const std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                           const std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     Config c{};
     c.chain_slot = slot_type;
@@ -536,6 +550,7 @@ static Config config_snapshot_chain(
     c.slot_hilo  = slot_hilo;
     c.slot_pc    = slot_pc;
     c.slot_sat   = slot_sat;
+    c.slot_ps    = slot_ps;
     return c;
 }
 
@@ -548,7 +563,8 @@ static void apply_chain_snapshot(Config &c, std::array<int, CHAIN_SLOTS> &slot_t
                                  std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
                                  std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
                                  std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-                                 std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+                                 std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                            std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     slot_type = c.chain_slot;
     slot_param = c.slot_comp;
@@ -560,6 +576,7 @@ static void apply_chain_snapshot(Config &c, std::array<int, CHAIN_SLOTS> &slot_t
     slot_hilo  = c.slot_hilo;
     slot_pc    = c.slot_pc;
     slot_sat   = c.slot_sat;
+    slot_ps    = c.slot_ps;
 }
 
 static void run_profiles_screen(std::array<int, CHAIN_SLOTS> &slot_type,
@@ -571,7 +588,8 @@ static void run_profiles_screen(std::array<int, CHAIN_SLOTS> &slot_type,
                                 std::array<PeqSlotParams, CHAIN_SLOTS> &slot_peq,
                                 std::array<HiloSlotParams, CHAIN_SLOTS> &slot_hilo,
                                 std::array<PitchCorrectSlotParams, CHAIN_SLOTS> &slot_pc,
-                                std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat)
+                                std::array<SaturatorSlotParams, CHAIN_SLOTS> &slot_sat,
+                            std::array<PitchShiftSlotParams, CHAIN_SLOTS> &slot_ps)
 {
     int sel = 0;
     timeout(-1);
@@ -637,10 +655,10 @@ static void run_profiles_screen(std::array<int, CHAIN_SLOTS> &slot_type,
             std::string path =
                 profiles_directory() + "/" + list[static_cast<std::size_t>(sel)] + ".conf";
             Config c = config_snapshot_chain(slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                                             slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                             slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
             if (load_effect_chain_profile(path, c)) {
                 apply_chain_snapshot(c, slot_type, slot_param, slot_eq, slot_rv, slot_dl, slot_dss,
-                                     slot_peq, slot_hilo, slot_pc, slot_sat);
+                                     slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 rebuild_fx_chain(slot_type.data());
             }
             continue;
@@ -658,7 +676,7 @@ static void run_profiles_screen(std::array<int, CHAIN_SLOTS> &slot_type,
                 && namebuf[0]) {
                 Config snap = config_snapshot_chain(slot_type, slot_param, slot_eq, slot_rv,
                                                     slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc,
-                                                    slot_sat);
+                                                    slot_sat, slot_ps);
                 (void)save_effect_chain_profile(namebuf, snap);
             }
             noecho();
@@ -788,6 +806,7 @@ int main() {
     std::array<HiloSlotParams, CHAIN_SLOTS>      slot_hilo  = cfg.slot_hilo;
     std::array<PitchCorrectSlotParams, CHAIN_SLOTS> slot_pc  = cfg.slot_pc;
     std::array<SaturatorSlotParams, CHAIN_SLOTS>     slot_sat = cfg.slot_sat;
+    std::array<PitchShiftSlotParams, CHAIN_SLOTS>    slot_ps  = cfg.slot_ps;
     std::array<int, CHAIN_SLOTS> slot_type = cfg.chain_slot;
     rebuild_fx_chain(slot_type.data());
 
@@ -835,6 +854,7 @@ int main() {
         cfg.slot_hilo        = slot_hilo;
         cfg.slot_pc          = slot_pc;
         cfg.slot_sat         = slot_sat;
+        cfg.slot_ps          = slot_ps;
         cfg.comp_enabled     = slot_param[0].enabled;
         cfg.comp_threshold   = slot_param[0].threshold;
         cfg.comp_ratio_idx   = slot_param[0].ratio_idx;
@@ -965,6 +985,14 @@ int main() {
                 x->drive.store(g, std::memory_order_relaxed);
                 x->mix.store(std::clamp(float(s.mix) / 100.0f, 0.0f, 1.0f),
                              std::memory_order_relaxed);
+            } else if (t == FX_PSHIFT) {
+                auto *x = static_cast<PitchShiftFX *>(g_fx_slots[i].get());
+                const auto &p = slot_ps[static_cast<std::size_t>(i)];
+                x->enabled.store(p.enabled, std::memory_order_relaxed);
+                x->semitones_idx.store(
+                    std::clamp(p.semi_idx, 0, PS_SEMI_STEPS - 1), std::memory_order_relaxed);
+                x->wet_mix.store(std::clamp(float(p.wet) / 100.0f, 0.0f, 1.0f),
+                                 std::memory_order_relaxed);
             }
         }
 
@@ -995,6 +1023,7 @@ int main() {
             auto     &hl    = slot_hilo[static_cast<std::size_t>(es)];
             auto     &pc    = slot_pc[static_cast<std::size_t>(es)];
             auto     &sat   = slot_sat[static_cast<std::size_t>(es)];
+            auto     &psh   = slot_ps[static_cast<std::size_t>(es)];
 
             if (st == FX_PCOR)
                 pc_clamp_pc_exp_cursor(se_cur, pc.low_latency_x);
@@ -1009,7 +1038,8 @@ int main() {
                 printw("— Empty");
             } else {
                 bool on = slot_effect_is_on(st, static_cast<std::size_t>(es), slot_param, slot_eq,
-                                            slot_rv, slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                            slot_rv, slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc,
+                                            slot_sat, slot_ps);
                 printw("— ");
                 if (has_colors()) {
                     if (on)
@@ -1183,6 +1213,14 @@ int main() {
                 row_ed(ly++, SE_SAT_DRIVE, "Drive (into tanh)", etmp, true);
                 std::snprintf(etmp, sizeof etmp, "%d%% wet", sat.mix);
                 row_ed(ly++, SE_SAT_MIX, "Saturation mix", etmp, true);
+            } else if (st == FX_PSHIFT) {
+                row_ed(ly++, SE_PS_EN, "Enabled", psh.enabled ? "ON" : "OFF", true);
+                int si = std::clamp(psh.semi_idx, 0, PS_SEMI_STEPS - 1);
+                int st_semi = si - PS_SEMI_CENTER;
+                std::snprintf(etmp, sizeof etmp, "%+d st", st_semi);
+                row_ed(ly++, SE_PS_SEMI, "Semitones", etmp, true);
+                std::snprintf(etmp, sizeof etmp, "%d%% wet", psh.wet);
+                row_ed(ly++, SE_PS_WET, "Wet mix", etmp, true);
             }
 
             if (st == FX_PCOR && g_fx_slots[es] && g_fx_slots[es]->effect_kind() == FX_PCOR) {
@@ -1287,7 +1325,7 @@ int main() {
             }
             if (ech == KEY_F(2)) {
                 run_profiles_screen(slot_type, slot_param, slot_eq, slot_rv, slot_dl, slot_dss,
-                                    slot_peq, slot_hilo, slot_pc, slot_sat);
+                                    slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 continue;
             }
             if (ech == 's' || ech == 'S') {
@@ -1311,7 +1349,7 @@ int main() {
                 if (tst != FX_NONE) {
                     slot_toggle_effect_enabled(tst, static_cast<std::size_t>(es), slot_param, slot_eq,
                                                slot_rv, slot_dl, slot_dss, slot_peq, slot_hilo,
-                                               slot_pc, slot_sat);
+                                               slot_pc, slot_sat, slot_ps);
                 }
                 continue;
             }
@@ -1403,6 +1441,9 @@ int main() {
                 case SE_SAT_EN:    sat.enabled = !sat.enabled; break;
                 case SE_SAT_DRIVE: sat.drive = std::max(0, sat.drive - 2); break;
                 case SE_SAT_MIX:   sat.mix = std::max(0, sat.mix - 2); break;
+                case SE_PS_EN:     psh.enabled = !psh.enabled; break;
+                case SE_PS_SEMI:   psh.semi_idx = wrap(psh.semi_idx, -1, PS_SEMI_STEPS); break;
+                case SE_PS_WET:    psh.wet = std::max(0, psh.wet - 2); break;
                 default: break;
                 }
                 break;
@@ -1486,6 +1527,9 @@ int main() {
                 case SE_SAT_EN:    sat.enabled = !sat.enabled; break;
                 case SE_SAT_DRIVE: sat.drive = std::min(100, sat.drive + 2); break;
                 case SE_SAT_MIX:   sat.mix = std::min(100, sat.mix + 2); break;
+                case SE_PS_EN:     psh.enabled = !psh.enabled; break;
+                case SE_PS_SEMI:   psh.semi_idx = wrap(psh.semi_idx, 1, PS_SEMI_STEPS); break;
+                case SE_PS_WET:    psh.wet = std::min(100, psh.wet + 2); break;
                 default: break;
                 }
                 break;
@@ -1517,20 +1561,22 @@ int main() {
                     pc_clamp_pc_exp_cursor(se_cur, pc.low_latency_x);
                 } else if (se_cur == SE_SAT_EN)
                     sat.enabled = !sat.enabled;
+                else if (se_cur == SE_PS_EN)
+                    psh.enabled = !psh.enabled;
                 break;
 
             case 'y':
             case 'Y':
                 if (!live) {
                     slot_clip_copy(g_chain_clip, es, slot_type, slot_param, slot_eq, slot_rv,
-                                   slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                   slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 }
                 break;
             case 'p':
             case 'P':
                 if (!live && g_chain_clip.valid) {
                     slot_clip_paste(g_chain_clip, es, slot_type, slot_param, slot_eq, slot_rv,
-                                    slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                    slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                     rebuild_fx_chain(slot_type.data());
                     st = std::clamp(slot_type[static_cast<std::size_t>(es)], 0, SLOT_TYPES - 1);
                     empty = (st == FX_NONE);
@@ -1541,7 +1587,7 @@ int main() {
             case 'X':
                 if (!live) {
                     slot_clip_cut(g_chain_clip, es, slot_type, slot_param, slot_eq, slot_rv,
-                                  slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                  slot_dl, slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                     rebuild_fx_chain(slot_type.data());
                     st = std::clamp(slot_type[static_cast<std::size_t>(es)], 0, SLOT_TYPES - 1);
                     empty = (st == FX_NONE);
@@ -1551,7 +1597,7 @@ int main() {
             case '[':
                 if (!live && es > 0) {
                     chain_swap_slots(es, es - 1, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                     rebuild_fx_chain(slot_type.data());
                     edit_slot = es - 1;
                 }
@@ -1559,7 +1605,7 @@ int main() {
             case ']':
                 if (!live && es < CHAIN_SLOTS - 1) {
                     chain_swap_slots(es, es + 1, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                     rebuild_fx_chain(slot_type.data());
                     edit_slot = es + 1;
                 }
@@ -1652,7 +1698,7 @@ int main() {
             } else {
                 const bool on =
                     slot_effect_is_on(st, ui, slot_param, slot_eq, slot_rv, slot_dl, slot_dss,
-                                      slot_peq, slot_hilo, slot_pc, slot_sat);
+                                      slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 if (has_colors()) {
                     if (sel)
                         attroff(A_REVERSE | A_BOLD);
@@ -1883,14 +1929,14 @@ int main() {
             break;
         case KEY_F(2):
             run_profiles_screen(slot_type, slot_param, slot_eq, slot_rv, slot_dl, slot_dss, slot_peq,
-                                slot_hilo, slot_pc, slot_sat);
+                                slot_hilo, slot_pc, slot_sat, slot_ps);
             break;
         case 'y':
         case 'Y':
             if (!live && field_is_chain_slot(cur)) {
                 int si = cur - F_CHAIN_0;
                 slot_clip_copy(g_chain_clip, si, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                               slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                               slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
             }
             break;
         case 'p':
@@ -1898,7 +1944,7 @@ int main() {
             if (!live && field_is_chain_slot(cur) && g_chain_clip.valid) {
                 int si = cur - F_CHAIN_0;
                 slot_clip_paste(g_chain_clip, si, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                                slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 rebuild_fx_chain(slot_type.data());
             }
             break;
@@ -1907,7 +1953,7 @@ int main() {
             if (!live && field_is_chain_slot(cur)) {
                 int si = cur - F_CHAIN_0;
                 slot_clip_cut(g_chain_clip, si, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                              slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                              slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 rebuild_fx_chain(slot_type.data());
             }
             break;
@@ -1916,7 +1962,7 @@ int main() {
                 int si = cur - F_CHAIN_0;
                 if (si > 0) {
                     chain_swap_slots(si, si - 1, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                     rebuild_fx_chain(slot_type.data());
                     cur = F_CHAIN_0 + si - 1;
                 }
@@ -1927,7 +1973,7 @@ int main() {
                 int si = cur - F_CHAIN_0;
                 if (si < CHAIN_SLOTS - 1) {
                     chain_swap_slots(si, si + 1, slot_type, slot_param, slot_eq, slot_rv, slot_dl,
-                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat);
+                                     slot_dss, slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                     rebuild_fx_chain(slot_type.data());
                     cur = F_CHAIN_0 + si + 1;
                 }
@@ -1941,7 +1987,7 @@ int main() {
                 int st = std::clamp(slot_type[si], 0, SLOT_TYPES - 1);
                 if (st != FX_NONE) {
                     slot_toggle_effect_enabled(st, si, slot_param, slot_eq, slot_rv, slot_dl, slot_dss,
-                                               slot_peq, slot_hilo, slot_pc, slot_sat);
+                                               slot_peq, slot_hilo, slot_pc, slot_sat, slot_ps);
                 }
             }
             break;
