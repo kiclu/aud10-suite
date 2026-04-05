@@ -24,8 +24,10 @@
 // handling runs on a dedicated UI thread (see std::thread in main).
 
 static jack_client_t *g_client   = nullptr;
-static jack_port_t   *g_in[2]   = {};
-static jack_port_t   *g_out[2]  = {};
+static jack_port_t   *g_in[2]       = {};
+static jack_port_t   *g_out[2]      = {};
+/** Extra stereo outputs carrying the same post-FX signal as output_1/2 — connect in QjackCtl etc. */
+static jack_port_t   *g_virt_out[2] = {};
 
 static std::array<std::unique_ptr<Effect>, CHAIN_SLOTS> g_fx_slots;
 
@@ -68,6 +70,10 @@ static int jack_process_cb(jack_nframes_t nframes, void *) {
     for (unsigned c = 0; c < 2; c++) {
         float *o = (float *)jack_port_get_buffer(g_out[c], nframes);
         std::memset(o, 0, nframes * sizeof(float));
+        if (g_virt_out[c]) {
+            float *v = (float *)jack_port_get_buffer(g_virt_out[c], nframes);
+            std::memset(v, 0, nframes * sizeof(float));
+        }
     }
 
     if (!g_active.load(std::memory_order_relaxed))
@@ -102,6 +108,15 @@ static int jack_process_cb(jack_nframes_t nframes, void *) {
             opk = std::max(opk, std::fabs(out[i]));
         }
         g_peak_out.store(opk, std::memory_order_relaxed);
+
+        if (g_virt_out[0] && g_virt_out[1]) {
+            float *v0 = (float *)jack_port_get_buffer(g_virt_out[0], nframes);
+            float *v1 = (float *)jack_port_get_buffer(g_virt_out[1], nframes);
+            for (jack_nframes_t i = 0; i < nframes; i++) {
+                v0[i] = out[i];
+                v1[i] = out[i];
+            }
+        }
     } else {
         float *in0  = (float *)jack_port_get_buffer(g_in[0], nframes);
         float *in1  = (float *)jack_port_get_buffer(g_in[1], nframes);
@@ -131,6 +146,15 @@ static int jack_process_cb(jack_nframes_t nframes, void *) {
             opk = std::max(opk, std::max(std::fabs(out0[i]), std::fabs(out1[i])));
         }
         g_peak_out.store(opk, std::memory_order_relaxed);
+
+        if (g_virt_out[0] && g_virt_out[1]) {
+            float *v0 = (float *)jack_port_get_buffer(g_virt_out[0], nframes);
+            float *v1 = (float *)jack_port_get_buffer(g_virt_out[1], nframes);
+            for (jack_nframes_t i = 0; i < nframes; i++) {
+                v0[i] = out0[i];
+                v1[i] = out1[i];
+            }
+        }
     }
 
     const auto t_dsp1 = std::chrono::steady_clock::now();
@@ -187,6 +211,13 @@ static void poll_jack_port_latencies() {
             out_hi = std::max(out_hi, lr.max);
             nout++;
         }
+        jack_port_t *pv = g_virt_out[c];
+        if (pv && jack_port_has_connections(pv)) {
+            jack_port_get_latency_range(pv, JackPlaybackLatency, &lr);
+            out_lo = std::min(out_lo, lr.min);
+            out_hi = std::max(out_hi, lr.max);
+            nout++;
+        }
     }
 
     if (nin == 0) {
@@ -239,6 +270,14 @@ static void disconnect_all() {
             for (int i = 0; conns[i]; i++)
                 jack_disconnect(g_client, jack_port_name(g_out[c]), conns[i]);
             jack_free(conns);
+        }
+        if (g_virt_out[c]) {
+            conns = jack_port_get_connections(g_virt_out[c]);
+            if (conns) {
+                for (int i = 0; conns[i]; i++)
+                    jack_disconnect(g_client, jack_port_name(g_virt_out[c]), conns[i]);
+                jack_free(conns);
+            }
         }
     }
 }
@@ -719,6 +758,10 @@ static void run_help_screen() {
     L("  d             Toggle focused slot on/bypass (# green=on, dim=off in chain list)");
     L("  q             Quit");
     L("");
+    L("JACK — virtual bus (not wired automatically)");
+    L("  Ports virtual_out_1 / virtual_out_2 mirror output_1/2 (post-FX, same gain).");
+    L("  Connect them to another JACK/PipeWire client's inputs in your patchbay.");
+    L("");
     L("Chain clipboard & order (only while transport is stopped)");
     L("  y             Copy focused slot (type + all parameters)");
     L("  p             Paste clipboard into focused slot");
@@ -764,6 +807,13 @@ int main() {
     g_in[1]  = jack_port_register(g_client, "input_2",  JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput,  0);
     g_out[0] = jack_port_register(g_client, "output_1", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
     g_out[1] = jack_port_register(g_client, "output_2", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
+    g_virt_out[0] =
+        jack_port_register(g_client, "virtual_out_1", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
+    g_virt_out[1] =
+        jack_port_register(g_client, "virtual_out_2", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
+    if (!g_virt_out[0] || !g_virt_out[1])
+        std::fprintf(stderr,
+                     "aud10-suite: could not register virtual_out_1/2 (virtual bus disabled).\n");
 
     jack_set_process_callback(g_client, jack_process_cb, nullptr);
     jack_set_buffer_size_callback(g_client, jack_bufsz_cb, nullptr);
